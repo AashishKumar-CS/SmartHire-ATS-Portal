@@ -1,0 +1,40 @@
+# ================================================
+# SmartHire .gitignore — place in smarthire/ root
+# ================================================
+
+# SECRETS — never push
+backend/src/main/resources/secrets.properties
+**/.env
+**/.env.local
+
+# Java/Maven build output
+backend/target/
+*.class
+*.jar
+*.war
+
+# User uploaded files (personal candidate data)
+backend/uploads/
+
+# Eclipse IDE files
+.classpath
+.project
+.settings/
+.factorypath
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# React dependencies and build
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
