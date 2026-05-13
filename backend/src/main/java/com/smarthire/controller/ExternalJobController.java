@@ -1,6 +1,6 @@
 package com.smarthire.controller;
 
-import com.smarthire.dao.JobDAO;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,8 +22,7 @@ public class ExternalJobController {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    @Autowired
-    private JobDAO jobDAO;
+   
 
     // ── Admin: Create a new external job ─────────────────────────────────────
     @PostMapping("/admin/create")

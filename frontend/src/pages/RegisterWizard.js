@@ -27,6 +27,9 @@ export default function RegisterWizard() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
+  // ── NEW: Demo OTP state ───────────────────────────────────────────────────
+  const [demoOtp, setDemoOtp] = useState(null); // stores OTP returned by backend in demo mode
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setEdu = (i, k, v) => setForm(f => {
     const ed = [...f.educationDetails];
@@ -40,6 +43,7 @@ export default function RegisterWizard() {
   };
   const removeSkill = (s) => set('skills', form.skills.filter(x => x !== s));
 
+  // ── UPDATED: handleSendOtp — handles demo mode response ──────────────────
   const handleSendOtp = async () => {
     if (!form.mobile || form.mobile.length < 10) { toast.error('Enter valid 10-digit mobile'); return; }
     setLoading(true);
@@ -47,21 +51,43 @@ export default function RegisterWizard() {
       const { data } = await sendOtp(form.mobile);
       if (data.success) {
         setOtpSent(true);
-        toast.success('OTP sent! Check server console (simulated)');
-        //if (data.otp) toast.info(`[DEV] OTP: ${data.otp}`, { autoClose: 15000 });
+        setDemoOtp(null); // clear any previous OTP banner
+
+        if (data.demoMode && data.otp) {
+          // Backend returned OTP in demo mode — store it to display in banner
+          setDemoOtp(data.otp);
+          toast.success('OTP generated! See the yellow box below.');
+        } else {
+          toast.success('OTP sent to your mobile number!');
+        }
+      } else {
+        toast.error(data.message || 'Failed to send OTP');
       }
-    } catch { toast.error('Failed to send OTP'); }
-    finally { setLoading(false); }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to send OTP');
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // ── UPDATED: handleVerifyOtp — clears demo OTP banner on success ─────────
   const handleVerifyOtp = async () => {
+    if (!otp || otp.length < 6) { toast.error('Enter the 6-digit OTP'); return; }
     setLoading(true);
     try {
       const { data } = await verifyOtp(form.mobile, otp);
-      if (data.success) { set('mobileVerified', true); toast.success('Mobile verified!'); }
-      else toast.error('Invalid OTP. Try again.');
-    } catch { toast.error('Verification failed'); }
-    finally { setLoading(false); }
+      if (data.success) {
+        set('mobileVerified', true);
+        setDemoOtp(null); // clear the demo OTP banner once verified
+        toast.success('Mobile verified!');
+      } else {
+        toast.error('Invalid OTP. Try again.');
+      }
+    } catch {
+      toast.error('Verification failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const validate = () => {
@@ -279,11 +305,56 @@ export default function RegisterWizard() {
                     </button>
                   ) : (
                     <>
-                      <div className="alert alert-info mb-3">OTP sent! Check the server console (simulated SMS).</div>
+                      {/* ── Status message ── */}
+                      <div className="alert alert-info mb-3">
+                        OTP generated! {demoOtp ? 'See the yellow box below for your OTP.' : 'Check your mobile.'}
+                      </div>
+
+                      {/* ── DEMO OTP BANNER ── shown only when backend returns OTP in demo mode ── */}
+                      {demoOtp && (
+                        <div style={{
+                          marginBottom: '16px',
+                          padding: '16px 20px',
+                          background: 'rgba(234, 179, 8, 0.1)',
+                          border: '1px solid rgba(234, 179, 8, 0.5)',
+                          borderRadius: '10px',
+                          textAlign: 'center',
+                        }}>
+                          <div style={{ fontWeight: '700', fontSize: '13px', color: '#92400e', marginBottom: '8px' }}>
+                            🔔 Demo Mode — Your OTP
+                          </div>
+                          <div style={{
+                            fontSize: '32px',
+                            fontWeight: '800',
+                            letterSpacing: '10px',
+                            color: '#78350f',
+                            fontFamily: 'monospace',
+                            padding: '10px 0',
+                            background: 'rgba(234, 179, 8, 0.15)',
+                            borderRadius: '6px',
+                            marginBottom: '8px',
+                          }}>
+                            {demoOtp}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#92400e', opacity: 0.8 }}>
+                            Enter this OTP in the field below. In production, it would be sent via SMS.
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── OTP Input ── */}
                       <div className="form-group">
                         <label className="form-label">Enter OTP</label>
-                        <input className="form-control" placeholder="6-digit OTP" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)} style={{ textAlign: 'center', fontSize: '22px', letterSpacing: '8px' }} />
+                        <input
+                          className="form-control"
+                          placeholder="6-digit OTP"
+                          maxLength={6}
+                          value={otp}
+                          onChange={e => setOtp(e.target.value.replace(/\D/, ''))}
+                          style={{ textAlign: 'center', fontSize: '22px', letterSpacing: '8px' }}
+                        />
                       </div>
+
                       <button className="btn btn-success btn-lg" style={{ width: '100%', marginBottom: '12px' }} onClick={handleVerifyOtp} disabled={loading}>
                         {loading ? 'Verifying…' : 'Verify OTP'}
                       </button>

@@ -2,11 +2,18 @@ package com.smarthire.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import okhttp3.*;
+
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -25,62 +32,85 @@ public class AIService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // 🔥 Throttling
+    // =========================================================================
+    // 🔥 THROTTLING
+    // =========================================================================
     private long lastCallTime = 0;
 
     private synchronized void throttle() {
+
         long now = System.currentTimeMillis();
         long gap = now - lastCallTime;
 
         if (gap < 1500) {
-            try { Thread.sleep(1500 - gap); } catch (Exception ignored) {}
+
+            try {
+                Thread.sleep(1500 - gap);
+            } catch (Exception ignored) {
+            }
         }
 
         lastCallTime = System.currentTimeMillis();
     }
 
     // =========================================================================
-    // GEMINI API CALL
+    // 🔥 GEMINI API CALL
     // =========================================================================
     private String callGemini(String prompt) {
 
-        if (apiKey == null || apiKey.isBlank()) {
-            System.out.println("[AI] Gemini key missing → fallback");
-            return null;
-        }
-
-        throttle();
-
         try {
+
+            // ✅ Fallback if key missing
+            if (apiKey == null || apiKey.isBlank()) {
+                System.out.println("[AI] Gemini API key missing");
+                return null;
+            }
+
+            throttle();
+
+            // ✅ Request Body
             String requestBody = objectMapper.writeValueAsString(
-                new java.util.HashMap<String, Object>() {{
-                    put("contents", List.of(
-                        new java.util.HashMap<String, Object>() {{
-                            put("parts", List.of(
-                                new java.util.HashMap<String, String>() {{
-                                    put("text", prompt);
-                                }}
-                            ));
-                        }}
-                    ));
-                }}
+                    Map.of(
+                            "contents", List.of(
+                                    Map.of(
+                                            "parts", List.of(
+                                                    Map.of(
+                                                            "text", prompt
+                                                    )
+                                            )
+                                    )
+                            )
+                    )
             );
 
+            // ✅ HTTP Request
             Request request = new Request.Builder()
                     .url(apiUrl)
                     .addHeader("X-goog-api-key", apiKey)
-                    .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
+                    .post(
+                            RequestBody.create(
+                                    requestBody,
+                                    MediaType.parse("application/json")
+                            )
+                    )
                     .build();
 
+            // ✅ Execute API
             try (Response response = httpClient.newCall(request).execute()) {
 
                 if (!response.isSuccessful()) {
-                    String err = response.body() != null ? response.body().string() : "";
+
+                    String err = response.body() != null
+                            ? response.body().string()
+                            : "";
+
                     System.err.println("[AI] Gemini error: " + err);
+
                     return null;
                 }
 
                 String body = response.body().string();
+
                 JsonNode root = objectMapper.readTree(body);
 
                 return root.path("candidates")
@@ -93,13 +123,16 @@ public class AIService {
             }
 
         } catch (Exception e) {
-            System.err.println("[AI] Gemini call failed: " + e.getMessage());
+
+            System.err.println("[AI] Gemini call failed: "
+                    + e.getMessage());
+
             return null;
         }
     }
 
     // =========================================================================
-    // 🔥 SINGLE ANALYSIS METHOD
+    // 🔥 MAIN ANALYSIS
     // =========================================================================
     public CombinedResult analyzeCandidate(
             String resumeText,
@@ -107,7 +140,10 @@ public class AIService {
             String jobTitle,
             String jobSkills) {
 
-        String resumeShort = resumeText.substring(0, Math.min(resumeText.length(), 1200));
+        String resumeShort = resumeText.substring(
+                0,
+                Math.min(resumeText.length(), 1200)
+        );
 
         String prompt = """
         Analyze candidate and job match.
@@ -134,92 +170,215 @@ public class AIService {
           "weaknesses": [],
           "recommendation": ""
         }
-        """.formatted(resumeShort, candidateSkills, jobTitle, jobSkills);
+        """.formatted(
+                resumeShort,
+                candidateSkills,
+                jobTitle,
+                jobSkills
+        );
 
         String response = callGemini(prompt);
 
-        if (response == null) return fallbackCombined(candidateSkills, jobSkills);
+        // ✅ Fallback
+        if (response == null) {
+            return fallbackCombined(candidateSkills, jobSkills);
+        }
 
         try {
-            String cleaned = response.replaceAll("(?s)```json", "")
-                    .replaceAll("(?s)```", "").trim();
+
+            String cleaned = response
+                    .replaceAll("(?s)```json", "")
+                    .replaceAll("(?s)```", "")
+                    .trim();
 
             JsonNode node = objectMapper.readTree(cleaned);
 
             CombinedResult r = new CombinedResult();
+
             r.setAtsScore(node.path("ats_score").asDouble(60));
+
             r.setMatchScore(node.path("match_score").asDouble(50));
 
-            r.setSkills(objectMapper.convertValue(node.path("skills"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)));
+            r.setSkills(
+                    objectMapper.convertValue(
+                            node.path("skills"),
+                            objectMapper.getTypeFactory()
+                                    .constructCollectionType(
+                                            List.class,
+                                            String.class
+                                    )
+                    )
+            );
 
-            r.setMissingSkills(objectMapper.convertValue(node.path("missing_skills"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)));
+            r.setMissingSkills(
+                    objectMapper.convertValue(
+                            node.path("missing_skills"),
+                            objectMapper.getTypeFactory()
+                                    .constructCollectionType(
+                                            List.class,
+                                            String.class
+                                    )
+                    )
+            );
 
-            r.setStrengths(objectMapper.convertValue(node.path("strengths"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)));
+            r.setStrengths(
+                    objectMapper.convertValue(
+                            node.path("strengths"),
+                            objectMapper.getTypeFactory()
+                                    .constructCollectionType(
+                                            List.class,
+                                            String.class
+                                    )
+                    )
+            );
 
-            r.setWeaknesses(objectMapper.convertValue(node.path("weaknesses"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)));
+            r.setWeaknesses(
+                    objectMapper.convertValue(
+                            node.path("weaknesses"),
+                            objectMapper.getTypeFactory()
+                                    .constructCollectionType(
+                                            List.class,
+                                            String.class
+                                    )
+                    )
+            );
 
-            r.setRecommendation(node.path("recommendation").asText(""));
+            r.setRecommendation(
+                    node.path("recommendation").asText("")
+            );
 
             return r;
 
         } catch (Exception e) {
-            System.err.println("[AI] JSON parse error: " + e.getMessage());
+
+            System.err.println("[AI] JSON Parse Error: "
+                    + e.getMessage());
+
             return fallbackCombined(candidateSkills, jobSkills);
         }
     }
 
     // =========================================================================
-    // FALLBACK
+    // 🔥 FALLBACK RESPONSE
     // =========================================================================
-    private CombinedResult fallbackCombined(String candidateSkills, String jobSkills) {
+    private CombinedResult fallbackCombined(
+            String candidateSkills,
+            String jobSkills) {
 
         CombinedResult r = new CombinedResult();
+
         r.setAtsScore(65);
+
         r.setMatchScore(50);
-        r.setSkills(List.of("Java", "Spring Boot", "SQL"));
-        r.setMissingSkills(List.of("Docker", "Kubernetes"));
-        r.setStrengths(List.of("Good structure", "Projects present", "Skills listed"));
-        r.setWeaknesses(List.of("No achievements", "Weak keywords", "No summary"));
-        r.setRecommendation("Improve ATS keywords and add measurable achievements");
+
+        r.setSkills(
+                List.of(
+                        "Java",
+                        "Spring Boot",
+                        "SQL"
+                )
+        );
+
+        r.setMissingSkills(
+                List.of(
+                        "Docker",
+                        "Kubernetes"
+                )
+        );
+
+        r.setStrengths(
+                List.of(
+                        "Good structure",
+                        "Projects present",
+                        "Skills listed"
+                )
+        );
+
+        r.setWeaknesses(
+                List.of(
+                        "No achievements",
+                        "Weak keywords",
+                        "No summary"
+                )
+        );
+
+        r.setRecommendation(
+                "Improve ATS keywords and add measurable achievements"
+        );
 
         return r;
     }
 
     // =========================================================================
-    // DTO
+    // 🔥 DTO
     // =========================================================================
     public static class CombinedResult {
+
         private double atsScore;
         private double matchScore;
+
         private List<String> skills;
         private List<String> missingSkills;
+
         private List<String> strengths;
         private List<String> weaknesses;
+
         private String recommendation;
 
-        public double getAtsScore() { return atsScore; }
-        public void setAtsScore(double v) { this.atsScore = v; }
+        public double getAtsScore() {
+            return atsScore;
+        }
 
-        public double getMatchScore() { return matchScore; }
-        public void setMatchScore(double v) { this.matchScore = v; }
+        public void setAtsScore(double atsScore) {
+            this.atsScore = atsScore;
+        }
 
-        public List<String> getSkills() { return skills; }
-        public void setSkills(List<String> v) { this.skills = v; }
+        public double getMatchScore() {
+            return matchScore;
+        }
 
-        public List<String> getMissingSkills() { return missingSkills; }
-        public void setMissingSkills(List<String> v) { this.missingSkills = v; }
+        public void setMatchScore(double matchScore) {
+            this.matchScore = matchScore;
+        }
 
-        public List<String> getStrengths() { return strengths; }
-        public void setStrengths(List<String> v) { this.strengths = v; }
+        public List<String> getSkills() {
+            return skills;
+        }
 
-        public List<String> getWeaknesses() { return weaknesses; }
-        public void setWeaknesses(List<String> v) { this.weaknesses = v; }
+        public void setSkills(List<String> skills) {
+            this.skills = skills;
+        }
 
-        public String getRecommendation() { return recommendation; }
-        public void setRecommendation(String v) { this.recommendation = v; }
+        public List<String> getMissingSkills() {
+            return missingSkills;
+        }
+
+        public void setMissingSkills(List<String> missingSkills) {
+            this.missingSkills = missingSkills;
+        }
+
+        public List<String> getStrengths() {
+            return strengths;
+        }
+
+        public void setStrengths(List<String> strengths) {
+            this.strengths = strengths;
+        }
+
+        public List<String> getWeaknesses() {
+            return weaknesses;
+        }
+
+        public void setWeaknesses(List<String> weaknesses) {
+            this.weaknesses = weaknesses;
+        }
+
+        public String getRecommendation() {
+            return recommendation;
+        }
+
+        public void setRecommendation(String recommendation) {
+            this.recommendation = recommendation;
+        }
     }
 }

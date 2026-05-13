@@ -27,19 +27,39 @@ public class CandidateService {
     @Value("${file.upload.dir}")
     private String uploadDir;
 
+    // Reads from application.properties → otp.demo.mode=${OTP_DEMO_MODE:true}
+    // Local: set OTP_DEMO_MODE=true in secrets.properties
+    // Render: set OTP_DEMO_MODE=true in environment variables
+    @Value("${otp.demo.mode:true}")
+    private boolean otpDemoMode;
+
     // ================= OTP =================
 
     public Map<String, Object> sendOtp(String mobile) {
         String otp = String.valueOf(100000 + new Random().nextInt(900000));
         otpDAO.saveOtp(mobile, otp);
 
-        System.out.println("📱 OTP: " + otp);
+        // Always log to server console (visible in Render logs)
+        System.out.println("📱 [OTP] Mobile: " + mobile + " | OTP: " + otp);
 
-        //for otp in response
-        //return Map.of("success", true, "message", "OTP sent");
-        
-        //for no otp in response
-        return Map.of("success", true, "message", "OTP sent. Check server console.");
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+
+        if (otpDemoMode) {
+            // DEMO MODE: Return OTP in the API response
+            // Frontend reads data.otp and shows it in a visible banner
+            // This is the correct approach when no SMS gateway is available
+            response.put("message", "OTP generated successfully");
+            response.put("otp", otp);        // frontend reads this
+            response.put("demoMode", true);  // frontend uses this flag
+        } else {
+            // Production: integrate a real SMS gateway (Twilio, MSG91, Fast2SMS) here
+            // and do NOT return otp in response
+            response.put("message", "OTP sent to your mobile number");
+            response.put("demoMode", false);
+        }
+
+        return response;
     }
 
     public boolean verifyOtp(String mobile, String otp) {
@@ -80,10 +100,10 @@ public class CandidateService {
         } catch (Exception ignored) {}
 
         return Map.of(
-                "success", true,
+                "success",     true,
                 "candidateId", id,
-                "username", username,
-                "password", rawPassword
+                "username",    username,
+                "password",    rawPassword
         );
     }
 
@@ -96,7 +116,7 @@ public class CandidateService {
         Candidate c = opt.get();
         c.setSkills(candidateDAO.findSkillsByCandidateId(id));
         c.setEducationDetails(candidateDAO.findEducationByCandidateId(id));
-        c.setPassword(null);
+        c.setPassword(null); // never return password to frontend
 
         return Map.of("success", true, "data", c);
     }
@@ -105,6 +125,20 @@ public class CandidateService {
 
     public Map<String, Object> uploadResume(int candidateId, MultipartFile file) {
         try {
+            // MAGIC BYTE VALIDATION
+            // PDF files always start with "%PDF" (bytes: 0x25 0x50 0x44 0x46)
+            // This catches attackers who rename a .exe or .html file to .pdf
+            byte[] header = new byte[4];
+            int bytesRead = file.getInputStream().read(header);
+            if (bytesRead < 4
+                    || header[0] != 0x25   // %
+                    || header[1] != 0x50   // P
+                    || header[2] != 0x44   // D
+                    || header[3] != 0x46) { // F
+                return Map.of("success", false,
+                        "message", "Invalid file. The uploaded file is not a valid PDF.");
+            }
+
             Path dir = Paths.get(uploadDir, "resumes");
             Files.createDirectories(dir);
 
@@ -114,36 +148,36 @@ public class CandidateService {
 
             candidateDAO.updateResumePath(candidateId, dest.toString());
 
-            // 🔥 Extract text
+            // Extract text from PDF
             String text = extractPdfText(dest.toFile());
 
-            // 🔥 Get candidate skills
+            // Get candidate skills
             List<String> skillsList = candidateDAO.findSkillsByCandidateId(candidateId);
             String skillsStr = String.join(", ", skillsList);
 
-            // 🔥 NEW AI CALL (Gemini)
+            // Call Gemini AI
             AIService.CombinedResult result = aiService.analyzeCandidate(
                     text,
                     skillsStr,
-                    "",   // no job context here
+                    "",  // no job context for ATS-only scoring
                     ""
             );
 
             // Save ATS score
             candidateDAO.updateAtsScore(candidateId, result.getAtsScore());
 
-            // Save extracted skills if empty
+            // Save AI-extracted skills if candidate had none
             if (skillsList.isEmpty() && result.getSkills() != null) {
                 candidateDAO.saveSkills(candidateId, result.getSkills());
             }
 
             Map<String, Object> resp = new HashMap<>();
-            resp.put("success", true);
-            resp.put("message", "Resume uploaded and analysed");
-            resp.put("atsScore", result.getAtsScore());
-            resp.put("skills", result.getSkills());
-            resp.put("strengths", result.getStrengths());
-            resp.put("weaknesses", result.getWeaknesses());
+            resp.put("success",        true);
+            resp.put("message",        "Resume uploaded and analysed");
+            resp.put("atsScore",       result.getAtsScore());
+            resp.put("skills",         result.getSkills());
+            resp.put("strengths",      result.getStrengths());
+            resp.put("weaknesses",     result.getWeaknesses());
             resp.put("recommendation", result.getRecommendation());
 
             return resp;
@@ -170,7 +204,9 @@ public class CandidateService {
     public List<Candidate> getAllCandidates() {
         return candidateDAO.findAll();
     }
-    
+
+    // ================= HELPERS =================
+
     private String extractPdfText(File pdfFile) {
         try (PDDocument doc = Loader.loadPDF(pdfFile)) {
             return new PDFTextStripper().getText(doc);
@@ -179,7 +215,7 @@ public class CandidateService {
             return "";
         }
     }
-    
+
     public Map<String, Object> updateProfile(Candidate candidate, List<String> skills) {
         candidateDAO.updateProfile(candidate);
 
@@ -192,7 +228,7 @@ public class CandidateService {
             "message", "Profile updated successfully"
         );
     }
-    
+
     public Map<String, Object> uploadProfileImage(int candidateId, MultipartFile file) {
         try {
             Path dir = Paths.get(uploadDir, "profiles");
@@ -200,11 +236,15 @@ public class CandidateService {
 
             String original = file.getOriginalFilename();
             String ext = (original != null && original.contains("."))
-                    ? original.substring(original.lastIndexOf("."))
+                    ? original.substring(original.lastIndexOf(".")).toLowerCase()
                     : ".jpg";
 
-            String filename = "profile_" + candidateId + "_" + System.currentTimeMillis() + ext;
+            // Whitelist of allowed image extensions
+            if (!Set.of(".jpg", ".jpeg", ".png", ".gif", ".webp").contains(ext)) {
+                return Map.of("success", false, "message", "Invalid image format.");
+            }
 
+            String filename = "profile_" + candidateId + "_" + System.currentTimeMillis() + ext;
             Path dest = dir.resolve(filename);
             Files.copy(file.getInputStream(), dest, StandardCopyOption.REPLACE_EXISTING);
 
@@ -213,7 +253,7 @@ public class CandidateService {
             return Map.of(
                 "success", true,
                 "message", "Profile image uploaded",
-                "path", filename
+                "path",    filename
             );
 
         } catch (Exception e) {
@@ -223,5 +263,4 @@ public class CandidateService {
             );
         }
     }
-    
 }
