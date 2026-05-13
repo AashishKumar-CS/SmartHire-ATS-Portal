@@ -1,9 +1,15 @@
 services:
   - type: web
     name: smarthire-backend
-    runtime: java
+
+    rootDir: backend
+
+    env: java
+
     buildCommand: mvn clean package -DskipTests
-    startCommand: java -jar target/smarthire-*.jar
+
+    startCommand: java -jar target/smarthire-backend-1.0.0.jar
+
     envVars:
       - key: PORT
         value: 8080
