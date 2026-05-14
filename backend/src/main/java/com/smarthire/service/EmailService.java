@@ -37,7 +37,7 @@ public class EmailService {
                 "Your Login Credentials:\n" +
                 "Username : " + username + "\n" +
                 "Password : " + password + "\n\n" +
-                "Please login at: http://localhost:3000/login\n\n" +
+                "Please login at: https://smart-hire-ats-portal.vercel.app\n\n" +
                 "Regards,\nSmartHire Team";
         sendEmail(to, "SmartHire – Your Account Credentials", body);
     }
