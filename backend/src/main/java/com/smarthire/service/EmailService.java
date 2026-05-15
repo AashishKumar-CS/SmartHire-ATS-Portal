@@ -49,13 +49,13 @@ public class EmailService {
             payload.put("htmlContent", body.replace("\n", "<br>"));
 
             webClient.post()
-                    .uri("/smtp/email")
-                    .header(HttpHeaders.AUTHORIZATION, apiKey)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(payload)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            .uri("/smtp/email")
+            .header("api-key", apiKey)   // ✅ FIXED HERE
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(payload)
+            .retrieve()
+            .bodyToMono(String.class)
+            .block();
 
             System.out.println("✅ Email sent successfully to: " + to);
 
